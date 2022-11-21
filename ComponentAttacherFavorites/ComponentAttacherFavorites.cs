@@ -18,16 +18,16 @@ namespace ComponentAttacherFavorites
         private const string FavoritesPath = "/Favorites";
 
         [AutoRegisterConfigKey]
-        private static readonly ModConfigurationKey<HashSet<string>> FavoriteCategories = new ModConfigurationKey<HashSet<string>>("favoriteCategories", "Favorited Categories", () => new HashSet<string>(), true);
+        private static readonly ModConfigurationKey<HashSet<string>> FavoriteCategories = new("favoriteCategories", "Favorited Categories", () => new HashSet<string>() { "Data > Dynamic" }, true);
 
         [AutoRegisterConfigKey]
-        private static readonly ModConfigurationKey<HashSet<string>> FavoriteComponents = new ModConfigurationKey<HashSet<string>>("favoriteComponents", "Favorited Components", () => new HashSet<string>(), true);
+        private static readonly ModConfigurationKey<HashSet<string>> FavoriteComponents = new("favoriteComponents", "Favorited Components", () => new HashSet<string>() { "FrooxEngine.ValueMultiDriver`1", "FrooxEngine.ReferenceMultiDriver`1" }, true);
 
         private static CategoryNode<Type> favoritesCategory;
         public override string Author => "Banane9";
         public override string Link => "https://github.com/Banane9/NeosComponentAttacherFavorites";
         public override string Name => "ComponentAttacherFavorites";
-        public override string Version => "2.0.0";
+        public override string Version => "2.0.1";
 
         private static CategoryNode<Type> FavoritesCategory
         {
@@ -46,8 +46,10 @@ namespace ComponentAttacherFavorites
 
         public override void OnEngineInit()
         {
-            Harmony harmony = new Harmony($"{Author}.{Name}");
+            var harmony = new Harmony($"{Author}.{Name}");
             Config = GetConfiguration();
+            Config.Set(FavoriteComponents, Config.GetValue(FavoriteComponents));
+            Config.Set(FavoriteCategories, Config.GetValue(FavoriteCategories));
             Config.Save(true);
             harmony.PatchAll();
 
@@ -57,8 +59,8 @@ namespace ComponentAttacherFavorites
         [HarmonyPatch(typeof(ComponentAttacher), "BuildUI")]
         private static class ComponentAttacherPatch
         {
-            private static readonly color favoriteColor = new color(1f, 1f, 0.8f);
-            private static readonly color nonFavoriteColor = new color(.8f);
+            private static readonly color favoriteColor = new(1f, 1f, 0.8f);
+            private static readonly color nonFavoriteColor = new(.8f);
 
             [HarmonyPostfix]
             public static void BuildUIPostfix(string path, bool genericType, SyncRef<Slot> ____uiRoot)
@@ -138,24 +140,16 @@ namespace ComponentAttacherFavorites
             }
 
             private static void addFavoriteCategory(string path)
-            {
-                FavoritesCategory.GetSubcategory(path);
-            }
+                => FavoritesCategory.GetSubcategory(path);
 
             private static void addFavoriteComponent(string name)
-            {
-                FavoritesCategory.AddElement(WorkerManager.GetType(name));
-            }
+                => FavoritesCategory.AddElement(WorkerManager.GetType(name));
 
             private static string getCategoryPathFromFavorite(string favoriteSubCategory)
-            {
-                return favoriteSubCategory.Substring(FavoritesPath.Length).Replace(" > ", "/");
-            }
+                => favoriteSubCategory.Substring(FavoritesPath.Length).Replace(" > ", "/");
 
             private static string getFavoriteFromCategoryPath(string path)
-            {
-                return path.Substring(1).Replace("/", " > ");
-            }
+                => path.Substring(1).Replace("/", " > ");
 
             private static string getTypeNameFromPath(string path)
             {
@@ -168,14 +162,10 @@ namespace ComponentAttacherFavorites
             }
 
             private static void removeFavoriteCategory(string path)
-            {
-                new Traverse(FavoritesCategory).Field<SortedDictionary<string, CategoryNode<Type>>>("_subcategories").Value.Remove(path);
-            }
+                => new Traverse(FavoritesCategory).Field<SortedDictionary<string, CategoryNode<Type>>>("_subcategories").Value.Remove(path);
 
             private static void removeFavoriteComponent(string name)
-            {
-                ((List<Type>)FavoritesCategory.Elements).Remove(WorkerManager.GetType(name));
-            }
+                => ((List<Type>)FavoritesCategory.Elements).Remove(WorkerManager.GetType(name));
         }
     }
 }
