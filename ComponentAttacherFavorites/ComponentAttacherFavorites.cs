@@ -6,174 +6,175 @@ using NeosModLoader;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 
 namespace ComponentAttacherFavorites
 {
     public class ComponentAttacherFavorites : NeosMod
     {
-        public override string Name => "ComponentAttacherFavorites";
-        public override string Author => "badhaloninja";
-        public override string Version => "1.0.0";
-        public override string Link => "https://github.com/badhaloninja/ComponentAttacherFavorites";
+        internal static ModConfiguration Config;
+
+        private const string FavoritesPath = "/Favorites";
 
         [AutoRegisterConfigKey]
-        private static readonly ModConfigurationKey<Dictionary<Type, string>> FavoriteComponents = new ModConfigurationKey<Dictionary<Type, string>>("favoriteComponents", "Favorited Components", () => new Dictionary<Type, string>() { });
+        private static readonly ModConfigurationKey<HashSet<string>> FavoriteCategories = new ModConfigurationKey<HashSet<string>>("favoriteCategories", "Favorited Categories", () => new HashSet<string>(), true);
 
-        private static Dictionary<Type, string> Favorites;
+        [AutoRegisterConfigKey]
+        private static readonly ModConfigurationKey<HashSet<string>> FavoriteComponents = new ModConfigurationKey<HashSet<string>>("favoriteComponents", "Favorited Components", () => new HashSet<string>(), true);
 
-        internal static ModConfiguration config;
-        public override void OnEngineInit()
+        private static CategoryNode<Type> favoritesCategory;
+        public override string Author => "Banane9";
+        public override string Link => "https://github.com/Banane9/NeosComponentAttacherFavorites";
+        public override string Name => "ComponentAttacherFavorites";
+        public override string Version => "2.0.0";
+
+        private static CategoryNode<Type> FavoritesCategory
         {
-            config = GetConfiguration();
-            Favorites = config.GetValue(FavoriteComponents);
+            get => favoritesCategory;
+            set
+            {
+                favoritesCategory = value;
 
-            Harmony harmony = new Harmony("me.badhaloninja.ComponentAttacherFavorites");
-            harmony.PatchAll();
+                foreach (var typeName in Config.GetValue(FavoriteComponents))
+                    favoritesCategory.AddElement(WorkerManager.GetType(typeName));
+
+                foreach (var category in Config.GetValue(FavoriteCategories))
+                    favoritesCategory.GetSubcategory(category);
+            }
         }
 
-
-        // This is pretty sloppily thrown together
-        [HarmonyPatch(typeof(ComponentAttacher), "BuildUI")]
-        class ComponentAttacher_BuildUI_Patch
+        public override void OnEngineInit()
         {
-            public static bool Prefix(ComponentAttacher __instance, string path, bool genericType, SyncRef<Slot> ____uiRoot, ref SyncRef<TextField> ____customGenericType, ref SyncType ____genericType)
+            Harmony harmony = new Harmony($"{Author}.{Name}");
+            Config = GetConfiguration();
+            Config.Save(true);
+            harmony.PatchAll();
+
+            Engine.Current.OnReady += () => FavoritesCategory = WorkerInitializer.ComponentLibrary.GetSubcategory(FavoritesPath);
+        }
+
+        [HarmonyPatch(typeof(ComponentAttacher), "BuildUI")]
+        private static class ComponentAttacherPatch
+        {
+            private static readonly color favoriteColor = new color(1f, 1f, 0.8f);
+            private static readonly color nonFavoriteColor = new color(.8f);
+
+            [HarmonyPostfix]
+            public static void BuildUIPostfix(string path, bool genericType, SyncRef<Slot> ____uiRoot)
             {
-                if (genericType) return true;
-                WorkerInitializer.ComponentLibrary.GetSubcategory("/Favorites"); // Generate favorites category
+                if (genericType)
+                    return;
 
-                Favorites = config.GetValue(FavoriteComponents);
-
-                var onOpenCategoryPressed = (ButtonEventHandler<string>)AccessTools.Method(__instance.GetType(), "OnOpenCategoryPressed").CreateDelegate(typeof(ButtonEventHandler<string>), __instance);
-                var onCancelPressed = (ButtonEventHandler)AccessTools.Method(__instance.GetType(), "OnCancelPressed").CreateDelegate(typeof(ButtonEventHandler), __instance);
-
-
-                ____uiRoot.Target.DestroyChildren();
-                ____customGenericType.Target = null;
-                ____genericType.Value = null;
-                UIBuilder uibuilder = new UIBuilder(____uiRoot.Target);
-                uibuilder.Style.MinHeight = 32f;
-                LocaleString localeString;
-                color color;
-
-
-                CategoryNode<Type> categoryNode;
-                if (string.IsNullOrEmpty(path) || path == "/")
+                if (____uiRoot.Target.GetComponentInChildren<ButtonRelay<string>>(relay => relay.Argument == FavoritesPath) is ButtonRelay<string> relay)
                 {
-                    categoryNode = WorkerInitializer.ComponentLibrary;
+                    relay.Slot.OrderOffset = long.MinValue;
+                    return;
                 }
-                else
+
+                var isFavorites = path == FavoritesPath;
+
+                // Stop before cancel button at the end
+                var buttons = ____uiRoot.Target.GetComponentsInChildren<Button>();
+                foreach (var button in buttons.Take(buttons.Count - 1))
                 {
-                    categoryNode = WorkerInitializer.ComponentLibrary.GetSubcategory(path);
-                    if (categoryNode == null)
+                    var buttonRelay = button.Slot.GetComponent<ButtonRelay<string>>();
+                    var buttonPath = buttonRelay.Argument.Value;
+                    var isComponent = buttonPath.Contains('.');
+
+                    // Skip back button
+                    if (!isComponent && buttonPath.Length < path.Length)
+                        continue;
+
+                    if (isFavorites && !isComponent)
                     {
-                        categoryNode = WorkerInitializer.ComponentLibrary;
-                        path = "";
+                        buttonPath = getCategoryPathFromFavorite(buttonPath);
+                        buttonRelay.Argument.Value = buttonPath;
                     }
-                }
-                if (categoryNode != WorkerInitializer.ComponentLibrary)
-                {
-                    localeString = "< (back)";
-                    color = new color(0.8f, 0.8f, 0.8f, 1f);
-                    uibuilder.Button(localeString, color, onOpenCategoryPressed, categoryNode.Parent.GetPath(), 0.35f);
+
+                    addFavoriteButton(button, buttonPath, isComponent);
                 }
 
-                foreach (CategoryNode<Type> categoryNode2 in categoryNode.Subcategories)
-                {
-                    localeString = categoryNode2.Name + " >";
-                    color = new color(1f, 1f, 0.8f, 1f);
-                    var btn = uibuilder.Button(localeString, color, onOpenCategoryPressed, path + "/" + categoryNode2.Name, 0.35f);
-                    btn.Label.ParseRichText.Value = false;
-
-                    if (path + "/" + categoryNode2.Name == "/Favorites")
-                    {
-                        btn.Slot.OrderOffset = -1;
-                    }
-                }
-
-
-
-                if (path != "/Favorites")
-                {
-                    foreach (Type type in categoryNode.Elements)
-                    {
-                        componentButton(__instance, type, uibuilder, path);
-                    }
-                }
-                else
-                {
-                    foreach (var fav in Favorites)
-                    {
-                        componentButton(__instance, fav.Key, uibuilder, fav.Value);
-                    }
-                }
-
-                localeString = "Cancel";
-                color = new color(1f, 0.8f, 0.8f, 1f);
-                uibuilder.Button(localeString, color, onCancelPressed, 0.35f);
-
-
-                return false;
+                // Make sure cancel button is at the end
+                buttons[buttons.Count - 1].Slot.OrderOffset = long.MaxValue;
             }
 
-            static void componentButton(ComponentAttacher instance, Type type, UIBuilder uibuilder, string path)
+            private static void addFavoriteButton(Button button, string buttonPath, bool isComponent)
             {
-                var openGenericTypesPressed = (ButtonEventHandler<string>)AccessTools.Method(instance.GetType(), "OpenGenericTypesPressed").CreateDelegate(typeof(ButtonEventHandler<string>), instance);
-                var onAddComponentPressed = (ButtonEventHandler<string>)AccessTools.Method(instance.GetType(), "OnAddComponentPressed").CreateDelegate(typeof(ButtonEventHandler<string>), instance);
+                var builder = new UIBuilder(button.Slot.Parent);
+                builder.Style.MinHeight = 32;
 
-                LocaleString localeString = type.GetNiceName("<", ">");
-                color color;
+                var panel = builder.Panel();
+                builder.VerticalFooter(36, out var footer, out var content);
+                button.Slot.Parent = content.Slot;
 
-                var horizontal = uibuilder.HorizontalLayout(4);
+                footer.OffsetMin.Value += new float2(4, 0);
+                builder = new UIBuilder(footer);
 
+                var favoritesSetting = Config.GetValue(isComponent ? FavoriteComponents : FavoriteCategories);
+                var name = isComponent ? getTypeNameFromPath(buttonPath) : getFavoriteFromCategoryPath(buttonPath);
+                var favColor = favoritesSetting.Contains(name) ? favoriteColor : nonFavoriteColor;
+                Action<string> addToFavoriteCategory = isComponent ? addFavoriteComponent : addFavoriteCategory;
+                Action<string> removeFromFavoriteCategory = isComponent ? removeFavoriteComponent : removeFavoriteCategory;
 
-                uibuilder.Style.MinWidth = 32;
-                uibuilder.Style.FlexibleWidth = 100;
-                uibuilder.Style.MinHeight = -1;
-                if (type.IsGenericTypeDefinition)
-                {
-                    color = new color(0.8f, 1f, 0.8f, 1f);
-                    uibuilder.Button(localeString, color, openGenericTypesPressed, Path.Combine(path, type.FullName), 0.35f).Label.ParseRichText.Value = false;
-                }
-                else
-                {
-                    color = new color(0.8f, 0.8f, 1f, 1f);
-                    uibuilder.Button(localeString, color, onAddComponentPressed, type.FullName, 0.35f).Label.ParseRichText.Value = false;
-                }
-
-
-
-                uibuilder.Style.FlexibleWidth = -1;
-                uibuilder.Style.MinWidth = 32f;
-                uibuilder.Style.PreferredWidth = 32f;
-                color = Favorites.ContainsKey(type) ? new color(1f, 1f, 0.8f) : color.White.MulRGB(0.8f);
-
-                var favorite = uibuilder.Button(NeosAssets.Common.Icons.Star, color);
-
+                var favorite = builder.Button(NeosAssets.Common.Icons.Star, favColor);
                 favorite.LocalPressed += (btn, btnEvent) =>
                 {
-                    if (Favorites.ContainsKey(type))
+                    if (favoritesSetting.Contains(name))
                     {
-                        Favorites.Remove(type);
-                        favorite.SetColors(color.White.MulRGB(0.8f));
+                        favoritesSetting.Remove(name);
+                        removeFromFavoriteCategory(name);
+                        favorite.SetColors(nonFavoriteColor);
                     }
                     else
                     {
-                        Favorites.Add(type, path);
-                        favorite.SetColors(new color(1f, 1f, 0.8f));
+                        favoritesSetting.Add(name);
+                        addToFavoriteCategory(name);
+                        favorite.SetColors(favoriteColor);
                     }
-                    // Save favorite
-                    config.Set(FavoriteComponents, Favorites);
-                    config.Save();
+
+                    Config.Save(true);
                 };
+            }
 
+            private static void addFavoriteCategory(string path)
+            {
+                FavoritesCategory.GetSubcategory(path);
+            }
 
-                uibuilder.NestOut();
+            private static void addFavoriteComponent(string name)
+            {
+                FavoritesCategory.AddElement(WorkerManager.GetType(name));
+            }
 
-                uibuilder.Style.FlexibleWidth = -1;
-                uibuilder.Style.MinWidth = -1;
-                uibuilder.Style.PreferredWidth = -1;
-                uibuilder.Style.MinHeight = 32f;
+            private static string getCategoryPathFromFavorite(string favoriteSubCategory)
+            {
+                return favoriteSubCategory.Substring(FavoritesPath.Length).Replace(" > ", "/");
+            }
+
+            private static string getFavoriteFromCategoryPath(string path)
+            {
+                return path.Substring(1).Replace("/", " > ");
+            }
+
+            private static string getTypeNameFromPath(string path)
+            {
+                var pathEnd = MathX.Max(path.LastIndexOf('/'), path.LastIndexOf('\\'));
+
+                if (pathEnd < 0)
+                    return path;
+
+                return path.Substring(pathEnd + 1);
+            }
+
+            private static void removeFavoriteCategory(string path)
+            {
+                new Traverse(FavoritesCategory).Field<SortedDictionary<string, CategoryNode<Type>>>("_subcategories").Value.Remove(path);
+            }
+
+            private static void removeFavoriteComponent(string name)
+            {
+                ((List<Type>)FavoritesCategory.Elements).Remove(WorkerManager.GetType(name));
             }
         }
     }
